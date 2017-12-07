@@ -13,4 +13,4 @@ Running
 Steps:
 1. Change the ```dataFile``` variable in the javascript to a link to file retreived from WProfX recording and analysis
 2. Change the ```paralleize``` and ```scaling factor``` variables
-3. Load "test.html" in a and see the emulation time
+3. Load ```test.html``` in a browser and see the emulation time
