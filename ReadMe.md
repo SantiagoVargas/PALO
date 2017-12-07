@@ -1,4 +1,4 @@
-Web Page Emulator
+PALO: PAge LOad Emulator
 ==========
 This project emulates a web page load while keeping the compute portion of the page constant.
 
