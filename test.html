@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>title</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+  </head>
+  <body>
+      <script type="text/javascript">
+        // Helper to call process for activity subdependencies
+        function process_subdependency(subdepId, activityData, parent, time, compScaleFactor, parallelize) {
+            let subdep = activityData[subdepId];
+            return new Promise((resolve, reject) => {
+                setTimeout(() => {
+                    // Remove the incoming edge from activityObj to subdep
+                    delete subdep.incoming[parent.activityId];
+                    // Process if there are no incoming edges into subdep
+                    if (!Object.keys(subdep.incoming).length) {
+                        process(subdep, activityData, compScaleFactor, parallelize).then(resolve);
+                    } else {
+                        // Otherwise resolve immediately
+                        resolve();
+                    }
+                }, Math.max(0, time));
+            });            
+        }
+
+        // Returns a new promise when all subdependencies and their subdependencies are resolved
+        function process(activityObj, activityData, computationScaleFactor = 1, parallelize = true) {
+            return new Promise((resolve, reject) => {
+                // Handle direct subdependencies (ie. time = -1)
+                let handle_direct_dependencies =  (run_resolver) => {
+                    let directDependencyPromises = [];
+                    for (let subdep of activityObj.outgoing || []) {
+                        if (subdep.time == -1) {
+                            let subdepPromise = process_subdependency(subdep.dest, activityData, activityObj, subdep.time, computationScaleFactor, parallelize);
+                            directDependencyPromises.push(subdepPromise);
+                        }
+                    }
+                    Promise.all(directDependencyPromises).then(run_resolver);
+                }
+
+                let dependencyPromises = [];
+
+                // Handle indirect subdependencies (ie. time is not -1)
+                for (let subdep of activityObj.outgoing || []) {
+                    if (subdep.time != -1) {
+                        let delay = subdep.time - activityObj.startTime;
+                        let subdepPromise = process_subdependency(subdep.dest, activityData, activityObj, delay, computationScaleFactor, parallelize);
+                        dependencyPromises.push(subdepPromise);
+                    }
+                }
+
+                // Handle parallelization code
+                if (parallelize) {
+                    let subdepPromise = new Promise((resolve, reject) => {
+                        handle_direct_dependencies(resolve);
+                    });
+                    dependencyPromises.push(subdepPromise);
+                }
+
+                var mainWorkPromise = new Promise((resolve, reject) => {
+                    // Do the main work and handle direct dependencies afterwards
+                    if (activityObj.activityId.startsWith("Networking_")) {
+                        // Do Networking work
+                        $.get({
+                            url: activityObj.url,
+                            crossDomain: true
+                        }).done((data) => {
+                            // console.log("Successful download");
+                        }).fail(function() {
+                            // console.log("This is not good");
+                        }).always(() => {
+                            if (!parallelize) {
+                                handle_direct_dependencies(resolve);
+                            } else {
+                                resolve();
+                            }
+                        });
+                    } else {
+                        let computationTime = activityObj.endTime - activityObj.startTime;  
+                        let scaledcomputationTime = computationScaleFactor * computationTime;
+                        if (!parallelize) {
+                            // Do non-networking work (ie. computation) by sleeping
+                            setTimeout(() => {
+                                handle_direct_dependencies(resolve);
+                            }, scaledcomputationTime);
+                        } else {
+                            resolve();
+                        }                 
+                    }
+                });
+                dependencyPromises.push(mainWorkPromise);
+                Promise.all(dependencyPromises).then(resolve);
+            });
+        }
+
+        // Parses the wprof_data and emulates a web page load
+        function emulate(wprof_data, computationScale, parallelize) {
+            // -- Parse Data --
+            // Get summary info - the first element
+            var summaryInfo = wprof_data.splice(0,1);
+            // Get metadata - the last 5 elements
+            var metadata = wprof_data.splice(-5,5);
+            // Get dependency information
+            var dependencies = metadata[2];
+            // Get net log information
+            var netLog = metadata[3];
+            // Get critical path information
+            var criticalPath = metadata[4];
+            // alert("Calling");
+            var ajaxTime = new Date().getTime();
+            
+            // Now that the data has been cleaned, create a hash of activity data
+            var activityData = {};
+            for (let mainActivity of wprof_data) {
+                for (let subActivity of mainActivity.objs) {
+                    activityData[subActivity.activityId] = subActivity;
+                }
+            }
+
+            console.log("activityData Length:", Object.keys(activityData).length);
+            console.log("Deps Length:", dependencies.objs.length);
+            // Assume the first element in the critical path is the starting activity
+            let startingActivity = criticalPath.criticalPath[0];
+            console.log(startingActivity);
+
+            // Model dependencies as a DAG
+            // Construct Adjacency List
+            for (let dep of dependencies.objs) {
+                let sourceActivity = dep.a1;
+                let destActivity = dep.a2;
+                // Add outgoing edge
+                if (!activityData[sourceActivity].outgoing)
+                    activityData[sourceActivity].outgoing = [];
+                let depObj = {
+                    dest: destActivity,
+                    time: dep.time
+                };
+                activityData[sourceActivity].outgoing.push(depObj);
+                // Add incoming edge
+                if (!activityData[destActivity].incoming)
+                    activityData[destActivity].incoming = {};
+                activityData[destActivity].incoming[sourceActivity] = activityData[sourceActivity];
+            }
+
+            
+            // Start the experiment
+            var startTime = new Date().getTime();
+            return new Promise((resolve, reject) => {
+                process(activityData[startingActivity], activityData, computationScale, parallelize).then(() => {
+                    let endTime = new Date().getTime();
+                    let totalTime = endTime - startTime;
+                    resolve(totalTime);
+                });
+            });  
+        }
+
+        // --Start the experiment--
+        // Change HTML status
+        let statusElement = document.createElement("p");
+        statusElement.innerHTML = "Starting Emulation";
+        $('body').append(statusElement);
+        // Load the data from the data file and emulate
+        var dataFile = "/wprof_data.json";
+        $.getJSON(dataFile).done((data) => {
+            // Run emulation
+            let computationScaleFactor = 1;
+            let parallelize = false;
+            emulate(data, computationScaleFactor, parallelize).then((totalTime) => {
+                // Change HTML status
+                let statusElement = document.createElement("p");
+                statusElement.innerHTML = "Total Time: " + totalTime;
+                $('body').append(statusElement);
+                console.log("Finised after:", totalTime);
+            });            
+        }).fail(() => {
+            console.log("Failed to load data.");
+        });
+      </script>
+  </body>
+</html>
